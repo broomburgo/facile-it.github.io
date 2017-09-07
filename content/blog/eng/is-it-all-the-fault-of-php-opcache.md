@@ -7,12 +7,12 @@ categories: [English, PHP, OPCache, realpath_cache]
 title: "Is it all the fault of PHP OPCache?"
 type: "post"
 languageCode: "en-EN"
-twitterImage: '/images/is-it-all-the-fault-of-php-opcache/share.png'
+twitterImage: '/images/is-it-all-the-fault-of-php-opcache/share.jpg'
 ---
 
 When I started my career as a developer I was very surprised reading the following sentence attributed to [Phil Karlton](https://martinfowler.com/bliki/TwoHardThings.html): _«There are only two hard things in Computer Science: **cache invalidation** and **naming things**»_. At the beginning, I was incredulous, because I didn't really understand the sense of these words. Not much later I started learning what it means. 
 
-Without digging too much in the past, I'd like to talk about a recent cache issue we are experiencing on our production infrastructure. Particularly we saw a "strange behavior" after each deploy: immediately afterward a successful deployment procedure when we try to refresh pages changed with the new release we don't see the updated code but the previous code for a while. Actually, the scenario described above is very common with **PHP** web applications. We have seen this behavior in the past, but after we moved to our new production environment it makes this "phenomenon" known in a more evident way. So we started investigating on it.
+Without digging too much in the past, I'd like to talk about a recent cache issue we are experiencing on our production infrastructure. Particularly we saw a "strange behavior" after each deploy: immediately afterward a successful deployment procedure when we try to refresh pages changed with the new release we don't see the updated code but the previous code for a while. Actually, the scenario described above is very common with **PHP** web applications. We have seen this behavior in the past, but after we moved to our new production environment it makes this "phenomenon" known in a more evident way. Therefore, we started investigating on it.
 
 Before going on it is essential to describe how our deployment procedure works.
 
@@ -26,16 +26,16 @@ Very often also more than 5 times a day, I wrote on the command line `shark-do d
 
 The task deploy for a recipe like collaboratori will do generally the following steps:
 
-- pull from origin/master the last commit;
-- setup folders, remove the unnecessary file and start creating a release;
-- install parameters, run composer install, download and dump assets;
-- do cache warmup;
-- create a release archive, transfer and extract it on the bastion machine;
-- call our an Ansible playbook to start release roll out using our infrastructure's REST API;
-- switch release, clean and remove old releases on the bastion machine;
-- tag the new release on New Relic and notify the end of task on Slack channel.
+1. pull from origin/master the last commit;
+2. setup folders, remove the unnecessary file and start creating a release;
+3. install parameters, run composer install, download and dump assets;
+4. do cache warmup;
+5. create a release archive, transfer and extract it on the bastion machine;
+6. call an Ansible playbook to start release roll out using our infrastructure's REST API;
+7. switch release, clean and remove old releases on the bastion machine;
+8. tag the new release on New Relic and notify the end of task on Slack channel.
 
-So we need to focus on the point number 6 because it's the roll out. In that point, an Ansible procedure is responsible for copy the new release from the bastion machine on all the target machines (for example front-end and batch machines), for setting up folders and permission and for doing release switch. So as described previously each deployment procedure consists of many necessary activities, but the turning point is the change of the current project folder, it is usually done through the symlink swap from the previous release folder to the new one. The current project folder is the document root of the specific web application.
+We need to focus on the point number 6 because it's the roll out. In that point, an Ansible procedure is responsible for copy the new release from the bastion machine on all the target machines (for example front-end and batch machines), for setting up folders and permission and for doing release switch. As described previously, each deployment procedure consists of many necessary activities, but the turning point is the change of the current project folder, it is usually done through the symlink swap from the previous release folder to the new one. The current project folder is the document root of the specific web application.
 
 It is nothing but something like this:
 
@@ -47,7 +47,7 @@ The option `-s` is used to create a symbolic link, instead the option `-f` is us
 
 Our deployment strategy is very common in the PHP world. We store multiple releases of the same application on the production machines and we use a symlink pointing the current version. In this manner, we try to deploy in an atomic and a safe way without impacts to production traffic.
 
-Almost I forgot another important piece of the puzzle: at the moment we had about 15 front-end machines behind a load-balancer with round-robin workload balancing policy which is more than two times the previous number of servers.
+Almost I forgot another important piece of the puzzle: we had about 15 front-end machines behind a load-balancer with round-robin workload balancing policy which is more than two times the previous number of servers.
 
 Now the question is: what happens after release switch? I will explain in the next paragraphs.
 
@@ -121,16 +121,21 @@ The following video shows the output of this new execution.
 
 {{< youtube ukp9XRTjH_s >}}
 
-Actually, something went wrong. We are experiencing the previous behavior. So, our reasoning is missing something and it isn't all the fault of OPCache.
+Actually, something went wrong. We are experiencing the previous behavior. Ergo, our reasoning is missing something and it isn't all the fault of OPCache.
 
 # realpath_cache: the true culprit
 
 When we use `include/require` functions or when we use autoload on PHP we need to think immediately to **realpath_cache**. Realpath_cache is a PHP feature that allows to cache files and folders path resolution to minimize time-consuming disk lookups and to improve performances. This is very useful when we work with many vendors or frameworks like for example Symfony, Zend or Laravel because they use a huge number of files.
 
-The path cache mechanism was introduced in PHP 5.1.0. At the moment the official docs is not mentioning or explaining realpath_cache except for the functions `realpath_cache_get()`, `realpath_cache_size()`, `clearstatcache()` and the `php.ini` parameters `realpath_cache_size` and `realpath_cache_ttl`. On the web, the only one reference is an [old post](http://jpauli.github.io/2014/06/30/realpath-cache.html) written by **Julien Pauli** on 2014. In his post Pauli, a well-known PHP contributor, explains how PHP resolves a path behind the scenes.
+The path cache mechanism was introduced in PHP 5.1.0. At the moment the official docs is not mentioning or explaining realpath_cache except for the functions `realpath_cache_get()`, `realpath_cache_size()`, `clearstatcache()` and the `php.ini` parameters `realpath_cache_size` and `realpath_cache_ttl`. 
+
+On the web, the only one reference is an [old post](http://jpauli.github.io/2014/06/30/realpath-cache.html) written by **Julien Pauli** on 2014. In his post Pauli, a well-known PHP contributor, explains how PHP resolves a path behind the scenes.
 
 When we access to a file in PHP, it tries to resolve the file path using a Unix system call called `stat()`. Stat returns file attributes (for example file system permission, filename extensions, and other metadata) about an **inode**. In the Unix world, an inode is a data structure used to describe a file system object such as a file or a directory. PHP puts the result of the system call in a data structure called `realpath_cache_bucket` excluding permissions, owners, etc. So if we retry to access to the same file the lookup on the bucket will avoid having a new heavy system call. In order to deepen the knowledge, I suggest reading the PHP source code [here](https://github.com/php/php-src/blob/php-7.0.0/Zend/zend_virtual_cwd.c).
-The function realpath_cache_get was introduced with PHP 5.3.2 and it allows to get an array of all the real path cache entries. Each element of the array has as key the resolved path and as value, an array of data like `key`, `is_dir`, `realpath`, `expires`. The following array is the output of `print_r(realpath_cache_get());` on our Docker test environment.
+
+The function `realpath_cache_get` was introduced with PHP 5.3.2 and it allows to get an array of all the real path cache entries. Each element of the array has as key the resolved path and as value, an array of data like `key`, `is_dir`, `realpath`, `expires`. 
+
+The following array is the output of `print_r(realpath_cache_get());` on our Docker test environment.
 
 ```PHP
 Array
@@ -182,30 +187,30 @@ Array
 
 Particularly we can say:
 
-- `key` it is a float. It's a hash associated with the path.
+- `key` is a float. It's a hash associated with the path.
 - `is_dir` is a boolean. It is true when the resolved path is a directory, otherwise it's false.
-- `realpath` is a string. It is the path resolved.
+- `realpath` is a string. It is the resolved path.
 - `expires` is an integer. It represents the timestamp after which the path in the cache will be invalidated. This value is strictly related to the parameter `realpath_cache_ttl`.
 
-In the previous sample, we have 6 paths, but all are related with the resolution of the path `/var/www/current/index.php`. PHP has created 6 cache keys to resolve only one path. So the path resolution is made splitting a path in part and resolving it. In our case the above real path is `/var/www/html/release1/index.php` because `/var/www/current` is a symlink to the folder `/var/www/html/release1`.
+In the previous sample, we have 6 paths, but all are related with the resolution of the path `/var/www/current/index.php`. PHP has created 6 cache keys to resolve only one path. From this follows that the path resolution is made splitting a path in part and resolving it. In our case the above real path is `/var/www/html/release1/index.php` because `/var/www/current` is a symlink to the folder `/var/www/html/release1`.
 
-In the Julien Pauli's post also specifies: _«The realpath cache is process bound, and not shared into shared memory»_. This means that cache must expire for every PHP process, so if we are using **PHP-FPM** to clean the whole web server, we need to wait the cache expiration for every worker of the pool.
+Julien Pauli's post also specifies: _«The realpath cache is process bound, and not shared into shared memory»_. This means that cache must expire for every PHP process, for that reason if we are using **PHP-FPM** to clean the whole web server, we need to wait the cache expiration for every worker of the pool.
 
 This last sentence is very useful to understand what happens during our test using the configuration `production-no-opcache`. Even if OPCache is disabled after the symlink swap PHP will start noticing every PHP process of the paths expiration slowly.
 
-In our real production environment, we need to consider that we have 15 front-end machines and every machine have about 35 PHP-FPM worker poll + 1 master process. This explains why in the new environment the "strange behavior" is more evident. 
+In our real production environment, we need to consider that we have 15 front-end machines and every machine have about 35 PHP-FPM worker polls + 1 master process. This explains why in the new environment the "strange behavior" is more evident. 
 
 We can tune the real path cache impact on our web application using the above mentioned the parameters `realpath_cache_size` and `realpath_cache_ttl`.
 
-`realpath_cache_size` determines the size of the realpath bucket to be used by PHP. It is an integer and it is useful to increment this value if our web application uses a huge number of files.
+`realpath_cache_size` determines the size of the real path bucket to be used by PHP. It is an integer and it is useful to increment this value if our web application uses a huge number of files.
 
-The other configuration directive `realpath_cache_ttl` as already mentioned, it represents the duration of time in seconds for which to cache real path information.
+The other configuration directive `realpath_cache_ttl`, as already mentioned, represents the duration of time in seconds for which to cache real path information.
 
-Now we had the full picture of the problem. We can we can re-enable OPCache extension and disable realpath_cache setting up size and TTL as described below:
+Now we had the full picture of the problem and we can re-enable OPCache extension and disable real path cache setting up size and time to live (TTL) as described below:
 
-```PHP
+```bash
 realpath_cache_size=0k
-realpath_cache_ttl=0
+realpath_cache_ttl=-1
 ```
 
 It's time to do our last (I hope!) test.
@@ -227,4 +232,6 @@ The following video shows the output of the last execution.
 
 At the end of the day, the scope of this post was to unveil the mystery about our cache issue and to share what I learned about OPCache and real path cache and their differences.
 
-In the post, I miss underlining a very important assumption of our deployment strategy. When we deploy our code, we need to be sure (we try :-D) that two contiguous releases are compatible. Think what can happen if a request that starts on one version of the code tries to access to other files during its execution and the files are updated, moved or deleted. If you are not able to guarantee the compatibility between releases, it's necessary to implement an atomic deployment strategy. This could be reached for example using containers or more simply using an isolated memory pool for each release deployed.
+In the post, I miss underlining a very important assumption of our deployment strategy. When we deploy our code, we need to be sure (we try :-D) that two contiguous releases are compatible. Think what can happen if a request that starts on one version of the code tries to access to other files during its execution and the files are updated, moved or deleted. If you are not able to guarantee the compatibility between releases, it's necessary to implement an atomic deployment strategy, in the strict sense of the word. This could be reached for example using containers or more simply using an isolated memory pool for each release deployed.
+
+Another way to avoid the symlinks update, in the middle of ongoing requests, is to give to the web server the responsibility to resolve the symlink and to assign it to `DOCUMENT_ROOT`. After it's needed to base all `include/require` and autoload on `DOCUMENT_ROOT`. The same result could be achieved at the PHP level in the application front controller by defining the base root via `realpath(__FILE__)`.
